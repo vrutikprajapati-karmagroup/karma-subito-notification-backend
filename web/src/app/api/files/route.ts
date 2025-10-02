@@ -1,21 +1,42 @@
-import { NextResponse } from "next/server";
-import { readdir, stat } from "fs/promises";
-import path from "path";
+// src/app/api/files/route.ts
+import { NextResponse } from 'next/server';
+import path from 'node:path';
+import { promises as fs } from 'node:fs';
 
-export const runtime = "nodejs";
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+
+const CORS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET,OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type',
+};
+
+const UPLOAD_DIR = path.join(process.cwd(), 'uploads');
+
+export async function OPTIONS() {
+  return new NextResponse(null, { status: 204, headers: CORS });
+}
 
 export async function GET() {
-  const dir = path.join(process.cwd(), "uploads");
   try {
-    const names = await readdir(dir);
+    await fs.mkdir(UPLOAD_DIR, { recursive: true });
+    const names = await fs.readdir(UPLOAD_DIR);
+
     const files = await Promise.all(
-      names.map(async (name) => {
-        const s = await stat(path.join(dir, name));
-        return { name, size: s.size, mtime: s.mtime };
-      })
+      names
+        .filter(n => n.toLowerCase().endsWith('.xlsx'))
+        .map(async (name) => {
+          const stat = await fs.stat(path.join(UPLOAD_DIR, name));
+          return { name, size: stat.size, mtime: stat.mtime };
+        })
     );
-    return NextResponse.json(files.sort((a, b) => b.mtime.getTime() - a.mtime.getTime()));
-  } catch {
-    return NextResponse.json([]);
+
+    return NextResponse.json({ ok: true, files }, { headers: CORS });
+  } catch (e: any) {
+    return NextResponse.json(
+      { ok: false, error: e?.message || 'List failed' },
+      { status: 500, headers: CORS }
+    );
   }
 }
