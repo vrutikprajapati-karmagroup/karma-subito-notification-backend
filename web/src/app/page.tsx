@@ -2,34 +2,48 @@
 
 import { useEffect, useState } from "react";
 
-type FileInfo = { name: string; size: number; mtime: string | Date };
+type FileItem = {
+  name: string;
+  size: number;
+  mtime: string;     // ISO string from API
+  url?: string;      // some APIs may include a direct URL
+};
 
 export default function Home() {
   const [file, setFile] = useState<File | null>(null);
-  const [files, setFiles] = useState<any[]>([]);
-  const [busy, setBusy] = useState(false);
+  const [files, setFiles] = useState<FileItem[]>([]);
+  const [busy, setBusy] = useState<boolean>(false);
   const [msg, setMsg] = useState<string | null>(null);
 
-  async function fetchFiles() {
+  async function fetchFiles(): Promise<void> {
     const res = await fetch("/api/files");
-    const data = await res.json();
-    setFiles(data);
+    // API can return either { files: [...] } or [...] depending on your route
+    const data = (await res.json()) as { files?: FileItem[] } | FileItem[];
+    const list: FileItem[] = Array.isArray(data) ? data : data.files ?? [];
+    setFiles(list);
   }
 
-  useEffect(() => { fetchFiles(); }, []);
+  useEffect(() => {
+    void fetchFiles();
+  }, []);
 
-  async function onSubmit(e: React.FormEvent) {
+  async function onSubmit(e: React.FormEvent<HTMLFormElement>): Promise<void> {
     e.preventDefault();
     if (!file) return;
+
     setBusy(true);
     setMsg(null);
+
     const fd = new FormData();
     fd.append("file", file);
+
     const res = await fetch("/api/upload", { method: "POST", body: fd });
-    const data = await res.json();
+    const data = (await res.json()) as { ok?: boolean; fileName?: string; error?: string };
+
     setBusy(false);
-    if (res.ok) {
-      setMsg(`Uploaded: ${data.fileName}`);
+
+    if (res.ok && data.ok) {
+      setMsg(`Uploaded: ${data.fileName ?? ""}`);
       setFile(null);
       await fetchFiles();
     } else {
@@ -43,11 +57,10 @@ export default function Home() {
 
       <form onSubmit={onSubmit} className="space-y-3">
         <input
-        className="border border-gray-300 rounded px-2 py-1"
+          className="border border-gray-300 rounded px-2 py-1"
           type="file"
           accept=".xlsx,.xls"
-          onChange={(e) => setFile(e.target.files?.[0] || null)}
-          // className="block"
+          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
         />
         <button
           disabled={!file || busy}
@@ -62,9 +75,12 @@ export default function Home() {
       <div className="space-y-2">
         <h2 className="text-xl font-medium">Stored Files</h2>
         <ul className="list-disc pl-5">
-          {files.map((f : any) => (
+          {files.map((f) => (
             <li key={f.name} className="break-all">
-              <a href={`/api/files/${encodeURIComponent(f.name)}`} className="underline">
+              <a
+                href={f.url ?? `/api/files/${encodeURIComponent(f.name)}`}
+                className="underline"
+              >
                 {f.name}
               </a>{" "}
               <span className="text-sm text-gray-500">
