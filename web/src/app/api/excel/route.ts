@@ -52,11 +52,9 @@ export async function GET(req: Request) {
     }));
 
     return NextResponse.json({ files: data }, { headers: corsHeaders() });
-  } catch (err) {
-    console.error(err);
-    return NextResponse.json(
-      { error: "Failed to list files" },
-      { status: 500, headers: corsHeaders() }
-    );
-  }
+ } catch (err: unknown) {
+  const message = err instanceof Error ? err.message : "Upload failed";
+  return NextResponse.json({ error: message }, { status: 500 });
+}
+
 }

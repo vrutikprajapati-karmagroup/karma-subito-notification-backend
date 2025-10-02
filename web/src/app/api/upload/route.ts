@@ -46,10 +46,8 @@ export async function POST(req: Request) {
     await fs.writeFile(dest, buf);
 
     return NextResponse.json({ ok: true, name: safeName }, { headers: CORS });
-  } catch (e: any) {
-    return NextResponse.json(
-      { ok: false, error: e?.message || 'Upload failed' },
-      { status: 500, headers: CORS }
-    );
-  }
+ } catch (err: unknown) {
+  const message = err instanceof Error ? err.message : "Upload failed";
+  return NextResponse.json({ error: message }, { status: 500 });
+}
 }
