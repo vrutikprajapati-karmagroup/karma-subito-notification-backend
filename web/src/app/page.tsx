@@ -6,7 +6,7 @@ type FileInfo = { name: string; size: number; mtime: string | Date };
 
 export default function Home() {
   const [file, setFile] = useState<File | null>(null);
-  const [files, setFiles] = useState<FileInfo[]>([]);
+  const [files, setFiles] = useState<any[]>([]);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -62,7 +62,7 @@ export default function Home() {
       <div className="space-y-2">
         <h2 className="text-xl font-medium">Stored Files</h2>
         <ul className="list-disc pl-5">
-          {files.map((f) => (
+          {files.map((f : any) => (
             <li key={f.name} className="break-all">
               <a href={`/api/files/${encodeURIComponent(f.name)}`} className="underline">
                 {f.name}
