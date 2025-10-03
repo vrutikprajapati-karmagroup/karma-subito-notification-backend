@@ -1,3 +1,4 @@
+// app/api/files/[file]/parsed/route.ts
 import { NextResponse } from "next/server";
 import path from "node:path";
 import { promises as fs } from "node:fs";
@@ -18,112 +19,108 @@ type CellValue = string | number | boolean | Date | null;
 type Row = Record<string, CellValue>;
 
 function norm(s: unknown): string {
-  return String(s ?? "")
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, "");
+  return String(s ?? "").trim().toLowerCase().replace(/\s+/g, "");
 }
 
-/* --------- date/time formatting helpers ---------- */
+/* ---------- date/time helpers ---------- */
 function zero(n: number) {
   return n < 10 ? `0${n}` : String(n);
 }
 
 function formatDatePart(v: CellValue): string {
   if (v == null || v === "") return "";
-  // Date object
   if (v instanceof Date) {
     const y = v.getFullYear();
     const m = zero(v.getMonth() + 1);
     const d = zero(v.getDate());
     return `${y}-${m}-${d}`;
   }
-  // Excel serial number
   if (typeof v === "number" && Number.isFinite(v)) {
     const p = XLSX.SSF.parse_date_code(v);
-    if (p && p.y && p.m && p.d) {
-      return `${p.y}-${zero(p.m)}-${zero(p.d)}`;
-    }
+    if (p && p.y && p.m && p.d) return `${p.y}-${zero(p.m)}-${zero(p.d)}`;
   }
-  // String (assume already formatted)
   return String(v).trim();
 }
 
 function formatTimePart(v: CellValue): string {
   if (v == null || v === "") return "";
-  if (v instanceof Date) {
-    return `${zero(v.getHours())}:${zero(v.getMinutes())}:${zero(
-      v.getSeconds()
-    )}`;
-  }
+  if (v instanceof Date)
+    return `${zero(v.getHours())}:${zero(v.getMinutes())}:${zero(v.getSeconds())}`;
   if (typeof v === "number" && Number.isFinite(v)) {
     const p = XLSX.SSF.parse_date_code(v);
-    if (p)
-      return `${zero(p.H || 0)}:${zero(p.M || 0)}:${zero(
-        Math.floor(p.S || 0)
-      )}`;
+    if (p) return `${zero(p.H || 0)}:${zero(p.M || 0)}:${zero(Math.floor(p.S || 0))}`;
   }
-  // String like "14:30:16" – normalize a bit
   const s = String(v).trim();
-  // If "14:30" ensure seconds
   if (/^\d{1,2}:\d{2}$/.test(s)) return `${s}:00`;
   return s;
 }
-/* ------------------------------------------------- */
+/* -------------------------------------- */
+
+/* ---------- value coercion helpers ---------- */
+function toBool(v: CellValue): boolean {
+  if (typeof v === "boolean") return v;
+  if (typeof v === "number") return v !== 0;
+  const s = String(v ?? "").trim().toLowerCase();
+  if (!s) return false;
+  return ["yes", "y", "true", "t", "sold", "soldout", "1"].includes(s);
+}
+function toNum(v: CellValue): number {
+  const n = Number(String(v ?? "").replace(/,/g, ""));
+  return Number.isFinite(n) ? n : 0;
+}
+/* ------------------------------------------- */
 
 function rowsFromSheet(ws: XLSX.WorkSheet): {
   rows: Array<{
-    body: string;
-    subtitle: string;
+    body: string;              // Event name (used as label and card header)
+    subtitle: string;          // "YYYY-MM-DD HH:mm:ss"
     seen: number;
     unseen: number;
     audience: string;
+    soldOut?: boolean;
+    confirmed?: number;
+    availableSlots?: number;
   }>;
-  titles: string[];
-  headlines: string[];
-  bodies: string[];
+  titles: string[];            // Marketing "Title"
+  headlines: string[];         // Marketing "Headline"
+  bodies: string[];            // Marketing "Body" copy
 } {
-  const json: Row[] = XLSX.utils.sheet_to_json<Row>(ws, {
-    defval: "",
-    raw: true,
-  });
-
+  const json: Row[] = XLSX.utils.sheet_to_json<Row>(ws, { defval: "", raw: true });
   if (!json.length) return { rows: [], titles: [], headlines: [], bodies: [] };
 
   const first = json[0];
   const keys = Object.keys(first).map((k) => [k, norm(k)] as const);
-
-  const findKey = (...candidates: string[]) =>
-    keys.find(([, k]) => candidates.includes(k))?.[0];
+  const findKey = (...candidates: string[]) => keys.find(([, k]) => candidates.includes(k))?.[0];
 
   // Event name for chart labels & card title
   const eventNameKey = findKey(
-    "eventname",
-    "event name",
-    "name",
-    "notification"
-  );
-  // Body copy (email/push body text) goes to BODIES[]
-  const bodyCopyKey = findKey(
-    "body",
-    "bodytext",
-    "body_text",
-    "copy",
-    "description"
+    "eventname", "eventname:", "event", "eventname:", "eventname:",
+    "eventname", "event name", "name", "notification"
   );
 
-  // date/time keys unchanged
+  // Text blocks
+  const titleKey = findKey("title");
+  const headlineKey = findKey("headline");
+  const bodyCopyKey = findKey("body", "bodytext", "body_text", "copy", "description");
+
+  // Date/time columns
   const subtitleKey = findKey("subtitle", "datetime", "sentat");
   const dateKey = findKey("date", "eventdate");
   const timeKey = findKey("time", "timeist", "time_ist", "eventtime");
 
+  // Metrics
   const seenKey = findKey("seen", "views", "opened");
   const unseenKey = findKey("unseen", "notseen", "unopened", "delivered");
-  const audienceKey = findKey("audience", "segment", "country", "region");
 
-  const titleKey = findKey("title");
-  const headlineKey = findKey("headline");
-  const bodyTextKey = findKey("bodytext", "body_text", "copy", "description");
+  // Extra fields (pills)
+  const soldKey = findKey("soldout", "sold out", "issoldout", "sold");
+  const confirmedKey = findKey(
+    "confirmedbooking", "confirmed bookings", "confirmed booking",
+    "confirmed", "bookings", "booking"
+  );
+  const slotsKey = findKey("availableslots", "available slots", "slots", "availableslot");
+
+  const audienceKey = findKey("audience", "segment", "country", "region");
 
   const rows: Array<{
     body: string;
@@ -131,6 +128,9 @@ function rowsFromSheet(ws: XLSX.WorkSheet): {
     seen: number;
     unseen: number;
     audience: string;
+    soldOut?: boolean;
+    confirmed?: number;
+    availableSlots?: number;
   }> = [];
   const titles: string[] = [];
   const headlines: string[] = [];
@@ -138,7 +138,8 @@ function rowsFromSheet(ws: XLSX.WorkSheet): {
 
   for (const r of json) {
     const body = eventNameKey ? String(r[eventNameKey] ?? "") : "";
-    // Build "YYYY-MM-DD HH:mm:ss"
+
+    // Build unified "YYYY-MM-DD HH:mm:ss"
     let subtitle = subtitleKey ? String(r[subtitleKey] ?? "") : "";
     if (!subtitle) {
       const dPart = dateKey ? formatDatePart(r[dateKey]) : "";
@@ -146,20 +147,19 @@ function rowsFromSheet(ws: XLSX.WorkSheet): {
       subtitle = `${dPart}${dPart && tPart ? " " : ""}${tPart}`.trim();
     }
 
-    const seen = seenKey ? Number(r[seenKey] ?? 0) || 0 : 0;
-    const unseen = unseenKey ? Number(r[unseenKey] ?? 0) || 0 : 0;
+    const seen = seenKey ? toNum(r[seenKey]) : 0;
+    const unseen = unseenKey ? toNum(r[unseenKey]) : 0;
     const audience = audienceKey ? String(r[audienceKey] ?? "") : "";
 
+    const soldOut = soldKey ? toBool(r[soldKey]) : undefined;
+    const confirmed = confirmedKey ? toNum(r[confirmedKey]) : undefined;
+    const availableSlots = slotsKey ? toNum(r[slotsKey]) : undefined;
+
     if (body || seen || unseen || subtitle || audience) {
-      rows.push({ body, subtitle, seen, unseen, audience });
-      if (titleKey) titles.push(String(r[titleKey] ?? "")); // marketing title
+      rows.push({ body, subtitle, seen, unseen, audience, soldOut, confirmed, availableSlots });
+      if (titleKey) titles.push(String(r[titleKey] ?? ""));
       if (headlineKey) headlines.push(String(r[headlineKey] ?? ""));
-      const copyVal = bodyCopyKey
-        ? String(r[bodyCopyKey] ?? "")
-        : bodyTextKey
-        ? String(r[bodyTextKey] ?? "")
-        : "";
-      bodies.push(copyVal);
+      bodies.push(bodyCopyKey ? String(r[bodyCopyKey] ?? "") : "");
     }
   }
 
@@ -188,6 +188,9 @@ export async function GET(
       seen: number;
       unseen: number;
       audience: string;
+      soldOut?: boolean;
+      confirmed?: number;
+      availableSlots?: number;
     }> = [];
     let TITLES: string[] = [];
     let HEADLINES: string[] = [];
@@ -203,6 +206,7 @@ export async function GET(
       if (bodies.length) BODIES = BODIES.concat(bodies);
     }
 
+    // Keep line chart aligned: both arrays derived from ROWS in order
     const LINE_LABELS = ROWS.map((r) => r.body);
     const LINE_SEEN = ROWS.map((r) => r.seen);
 
@@ -221,9 +225,6 @@ export async function GET(
     );
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Failed to parse file";
-    return NextResponse.json(
-      { error: message },
-      { status: 500, headers: CORS }
-    );
+    return NextResponse.json({ error: message }, { status: 500, headers: CORS });
   }
 }
